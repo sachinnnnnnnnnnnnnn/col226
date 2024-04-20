@@ -1,0 +1,159 @@
+type exp =
+  | V of string
+  | Abs of string * exp
+  | App of exp * exp
+  | Num of int                (* Numerals *)
+  | Bool of bool              (* Booleans *)
+  | Tuple of exp list         (* Tuples *)
+  | Proj of int * exp         (* Projection *)
+  | IfThenElse of exp * exp * exp
+  | Plus of exp * exp
+  | Minus of exp * exp
+  | Times of exp * exp
+  | Div of exp * exp
+  | Eq of exp * exp
+  | Gt of exp * exp
+  | Lt of exp * exp
+  | And of exp * exp
+  | Or of exp * exp
+  | Not of exp;;
+
+  
+
+type value =
+  | VNum of int
+  | VBool of bool
+  | VTuple of value list
+  | VClosure of string * opcode list * env
+and env = (string * value) list
+and opcode =
+  | LOOKUP of string
+  | APP
+  | MKCLOS of string * opcode list
+  | RET
+  | CONST of value
+  | PLUS
+  | MINUS
+  | TIMES
+  | DIV
+  | EQ
+  | GT
+  | LT
+  | AND
+  | OR
+  | NOT
+  | PROJ of int
+  | JMP of opcode list * opcode list
+;;
+
+
+
+let rec compile_exp exp =
+  match exp with
+  | V x -> [LOOKUP x]
+  | Abs (x, e) -> [MKCLOS (x, compile_exp e @ [RET])]
+  | App (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [APP]
+  | Num n -> [CONST (VNum n)]
+  | Bool b -> [CONST (VBool b)]
+  | Tuple lst -> (
+      let rec compile_tuple lst acc =
+        match lst with
+        | [] -> acc
+        | Num n :: tl -> compile_tuple tl (acc @ [VNum n])
+        | Bool b :: tl -> compile_tuple tl (acc @ [VBool b])
+        | Tuple lst' :: tl -> compile_tuple tl (acc @ [VTuple (compile_tuple lst' [])])
+        | _ -> failwith "Invalid tuple"
+
+      in [CONST (VTuple (compile_tuple lst []))]
+    )
+  | Proj (n, e) -> compile_exp e @ [PROJ n]
+  | IfThenElse (e1,e2,e3) -> compile_exp e1 @ [JMP(compile_exp e2, compile_exp e3)]
+  | Plus (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [PLUS]
+  | Minus (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [MINUS]
+  | Times (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [TIMES]
+  | Div (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [DIV]
+  | Eq (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [EQ]
+  | Gt (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [GT]
+  | Lt (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [LT]
+  | And (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [AND]
+  | Or (e1, e2) -> compile_exp e1 @ compile_exp e2 @ [OR]
+  | Not e -> compile_exp e @ [NOT]
+
+  | _ -> failwith "Invalid expression";;
+
+let rec execute_secd env stk dump code =
+  match code with
+  | [] -> List.hd stk
+  | op :: rest ->
+      match op with
+      | LOOKUP x -> execute_secd env (List.assoc x env :: stk) dump rest
+      | APP ->
+          (match stk with
+           | v :: VClosure (x, e, clo_env) :: stk' -> 
+               execute_secd ((x, v) :: clo_env) [] ((env,stk',rest)::dump) e
+           | _ -> failwith "Application of non-closure value")
+            
+      | MKCLOS (x, e) -> execute_secd env (VClosure (x, e, env) :: stk) dump rest
+      | RET ->
+          (match dump with
+           | (env', stk', rest') :: dump' -> execute_secd env' (stk) dump' rest'
+           | _ -> failwith "Invalid RET")
+      | CONST v -> execute_secd env (v :: stk) dump rest
+      | PLUS ->
+          (match stk with
+           | VNum x :: VNum y :: tl -> execute_secd env (VNum (x + y) :: tl) dump rest
+           | _ -> failwith "Invalid arguments for PLUS")
+      | MINUS ->
+          (match stk with
+           | VNum x :: VNum y :: tl -> execute_secd env (VNum (x - y) :: tl) dump rest
+           | _ -> failwith "Invalid arguments for MINUS")
+      | TIMES ->
+          (match stk with
+           | VNum x :: VNum y :: tl -> execute_secd env (VNum (x * y) :: tl) dump rest
+           | _ -> failwith "Invalid arguments for TIMES")
+      | DIV ->
+          (match stk with
+           | VNum x :: VNum y :: tl -> execute_secd env (VNum (x / y) :: tl) dump rest
+           | _ -> failwith "Invalid arguments for DIV")
+      | EQ ->
+          (match stk with
+           | VNum x :: VNum y :: tl -> execute_secd env (VBool (x = y) :: tl) dump rest
+           | _ -> failwith "Invalid arguments for EQ")
+      | GT ->
+          (match stk with
+           | VNum x :: VNum y :: tl -> execute_secd env (VBool (x > y) :: tl) dump rest
+           | _ -> failwith "Invalid arguments for GT")
+      | LT ->
+          (match stk with
+           | VNum x :: VNum y :: tl -> execute_secd env (VBool (x < y) :: tl) dump rest
+           | _ -> failwith "Invalid arguments for LT")
+      | AND ->
+          (match stk with
+           | VBool x :: VBool y :: tl -> execute_secd env (VBool (x && y) :: tl) dump rest
+           | _ -> failwith "Invalid arguments for AND")
+      | OR ->
+          (match stk with
+           | VBool x :: VBool y :: tl -> execute_secd env (VBool (x || y) :: tl) dump rest
+           | _ -> failwith "Invalid arguments for OR")
+      | NOT ->
+          (match stk with
+           | VBool x :: tl -> execute_secd env (VBool (not x) :: tl) dump rest
+           | _ -> failwith "Invalid argument for NOT")
+      | JMP (c1, c2) -> 
+          (match stk with
+           | VBool true :: tl -> execute_secd env tl dump c1
+           | VBool false :: tl -> execute_secd env tl dump c2
+           | _ -> failwith "Invalid argument for JMP")
+      | PROJ(n) ->
+          (match stk with
+           | VTuple lst :: tl -> execute_secd env (List.nth lst n :: tl) dump rest
+           | _ -> failwith "Invalid argument for PROJ");;
+
+let secd env stk code dump =
+  execute_secd env stk dump code;;
+
+execute_secd [("x", VNum 1)] [] [] (compile_exp (V "y"));;
+execute_secd  [("x", VNum 1)] [] [] (compile_exp (V "x"));;
+execute_secd [("x", VClosure("x", [LOOKUP "y"; RET], [("y", VNum 2)])); ("y", VNum 2)] [] [] (compile_exp (App(V "x", V "y")));; 
+execute_secd  [("x", VNum 1)] [] [] (compile_exp (App(Abs("x", V "x"), V "x")));;
+execute_secd [("x", VNum 1); ("y", VNum 2)] [] [] (compile_exp (V "y"));;
